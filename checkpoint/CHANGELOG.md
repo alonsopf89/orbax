@@ -35,14 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a generic JAX error, when arrays on different device lists are saved or
   restored together (even if save or restore batching would split them across
   calls).
+- `ArrayHandler(..., balance_arrays_across_replicas=True)` now caps whole-array
+  balancing to `max_replicas_for_replica_parallel` when specified, and when a
+  `Dispatcher` (such as `ColocatedPythonDispatcher`) is configured, selects each
+  array's assigned replica shards on device before host transfer (avoiding
+  redundant D2H copies on unselected replicas). On Pathways, upgrade Orbax in
+  the workload and `colocated-python-sidecar` images together before enabling
+  `balance_arrays_across_replicas=True`.
 
 ### Fixed
 
 - Colocated Python no longer copies accelerator memory kinds (e.g.
   `pinned_host` for host-offloaded arrays) onto colocated CPU shardings, which
   broke saving and restoring such arrays.
+- Fix `IndexError` when a process saves a `jax.Array` that it holds no shards
+  of, for example an array on a sub-mesh of other processes' devices.
 
 ## [0.12.11] - 2026-11-16
+
 ### Fixed
 
 - Avoid `jax.devices()` calls in Pathways multihost backend detection,
