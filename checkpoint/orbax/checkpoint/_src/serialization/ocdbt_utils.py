@@ -150,6 +150,9 @@ async def merge_ocdbt_per_process_files(
     enable_validation: bool = True,
     *,
     store_ocdbt_metadata_and_values_separately: bool = False,
+    temporary_metadata_context: (
+        ts_utils.OcdbtTemporaryMetadataContext | None
+    ) = None,
 ):
   """Merges OCDBT files written to per-process subdirectories.
 
@@ -172,12 +175,34 @@ async def merge_ocdbt_per_process_files(
       performance impact.
     store_ocdbt_metadata_and_values_separately: Whether to store OCDBT metadata
       and values separately.
+    temporary_metadata_context: If `None` (default), merges per-process OCDBT
+      metadata already committed to persistent subdirectories under `directory`
+      (written without `OcdbtTemporaryMetadataContext` or committed via
+      `commit_temporary_ocdbt_metadata` with `process_spec=None`). If provided,
+      merges directly from a consolidated temporary directory; the context
+      passed here must have `process_spec=None`, and the per-process writes
+      must have set `OcdbtTemporaryMetadataContext.process_spec` (do not set
+      `process_spec` during writes unless using this direct-merge route).
   """
+  if (
+      temporary_metadata_context is not None
+      and temporary_metadata_context.process_spec is not None
+  ):
+    raise ValueError(
+        'OCDBT merge mode does not support per-process temporary metadata'
+        ' context; pass an OcdbtTemporaryMetadataContext without process_spec'
+        ' to merge_ocdbt_per_process_files.'
+    )
   start_time = time.time()
+  process_dirs_root = (
+      temporary_metadata_context.path
+      if temporary_metadata_context is not None
+      else directory
+  )
   process_specs = [
       ocdbt_process_spec.OcdbtProcessSpec.parse(process_dir.name)
       for process_dir in sorted(
-          directory.glob(f'{ocdbt_process_spec.PROCESS_PREFIX}*')
+          process_dirs_root.glob(f'{ocdbt_process_spec.PROCESS_PREFIX}*')
       )
   ]
   if not process_specs:  # No per-process OCDBT checkpoint found!
@@ -186,7 +211,7 @@ async def merge_ocdbt_per_process_files(
         ' per-process OCDBT checkpoint subdirs found in %s, ',
         multihost.process_index(),
         threading.current_thread().name,
-        directory,
+        process_dirs_root,
     )
     return
 
@@ -205,6 +230,7 @@ async def merge_ocdbt_per_process_files(
         use_ocdbt=True,
         ocdbt_process_spec=process_spec,
         ocdbt_write_options=merge_write_options,
+        ocdbt_temporary_metadata_context=temporary_metadata_context,
     )
     logging.vlog(
         1,
@@ -249,7 +275,20 @@ async def commit_temporary_ocdbt_metadata(
     *,
     store_ocdbt_metadata_and_values_separately: bool = False,
 ) -> None:
-  """Commits temporary OCDBT metadata to the persistent metadata directory."""
+  """Commits temporary OCDBT metadata to the persistent metadata directory.
+
+  Only supported when `temporary_metadata_context.process_spec` is `None` (the
+  commit-via-persistent-storage route). When `process_spec` was set during
+  writes for direct merging, use `merge_ocdbt_per_process_files` instead.
+
+  Args:
+    persistent_path: Target persistent directory (e.g., per-process directory).
+    temporary_metadata_context: Context with `process_spec=None` pointing to the
+      temporary metadata directory used during writes.
+    ts_context: Tensorstore context.
+    store_ocdbt_metadata_and_values_separately: Whether to store OCDBT metadata
+      and values separately.
+  """
   target_kvstore_tspec = ts_utils.build_kvstore_tspec(
       persistent_path.as_posix(),
       use_ocdbt=True,
