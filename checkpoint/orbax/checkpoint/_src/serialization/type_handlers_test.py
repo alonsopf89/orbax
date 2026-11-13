@@ -495,6 +495,121 @@ class SerializationTest(
     )
     test_utils.assert_tree_equal(self, arrays, restored)
 
+  @parameterized.named_parameters(
+      dict(
+          testcase_name='sharded_single_replica',
+          num_replicas=1,
+          replica_id=0,
+          use_replica_parallel=False,
+          expected_local_shape=(4, 4),
+          expect_sliced=False,
+      ),
+      dict(
+          testcase_name='sharded_local_checkpointing',
+          num_replicas=1,
+          replica_id=None,
+          use_replica_parallel=False,
+          expected_local_shape=(4, 4),
+          expect_sliced=False,
+      ),
+      dict(
+          testcase_name='sharded_replica_parallel_fallback',
+          num_replicas=1,
+          replica_id=0,
+          use_replica_parallel=True,
+          expected_local_shape=(4, 4),
+          expect_sliced=False,
+      ),
+      dict(
+          testcase_name='replicated_single_replica',
+          num_replicas=2,
+          replica_id=0,
+          use_replica_parallel=False,
+          expected_local_shape=(4, 4),
+          expect_sliced=False,
+      ),
+      dict(
+          testcase_name='replicated_local_checkpointing',
+          num_replicas=2,
+          replica_id=None,
+          use_replica_parallel=False,
+          expected_local_shape=(4, 4),
+          expect_sliced=False,
+      ),
+      dict(
+          testcase_name='replicated_replica_parallel',
+          num_replicas=2,
+          replica_id=0,
+          use_replica_parallel=True,
+          expected_local_shape=(2, 4),
+          expect_sliced=True,
+      ),
+  )
+  def test_get_replica_slices_without_addressable_shards(
+      self,
+      num_replicas: int,
+      replica_id: Optional[int],
+      use_replica_parallel: bool,
+      expected_local_shape: tuple[int, ...],
+      expect_sliced: bool,
+  ):
+    if jax.process_count() < 2:
+      self.skipTest('Test requires at least 2 processes.')
+    other_devices = [d for d in jax.devices() if d.process_index == 1]
+    if len(other_devices) < num_replicas or len(other_devices) % num_replicas:
+      self.skipTest(
+          f'Test requires process 1 device count ({len(other_devices)}) to be'
+          f' divisible by {num_replicas}.'
+      )
+    num_partitions = len(other_devices) // num_replicas
+    mesh = jax.sharding.Mesh(
+        np.asarray(other_devices).reshape(num_partitions, num_replicas),
+        ('x', 'y'),
+    )
+    sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec('x', None)
+    )
+    global_shape = (4 * num_partitions, 4)
+    inp = np.arange(np.prod(global_shape), dtype=np.float32).reshape(
+        global_shape
+    )
+    local_shards = [
+        jax.device_put(inp[index], d)
+        for d, index in sharding.devices_indices_map(global_shape).items()
+        if d.process_index == multihost.process_index()
+    ]
+    arr = jax.make_array_from_single_device_arrays(
+        global_shape, sharding, local_shards, dtype=np.float32
+    )
+    rslices = replica_slices.get_replica_slices(
+        arr, replica_id=replica_id, use_replica_parallel=use_replica_parallel
+    )
+    on_host = replica_slices.transfer_arrays_to_host(
+        [arr],
+        replica_ids=[replica_id],
+        use_replica_parallel=use_replica_parallel,
+    )[0]
+    self.assertEqual(rslices.local_shape, expected_local_shape)
+    self.assertEqual(on_host.local_shape, expected_local_shape)
+    self.assertTrue(on_host.is_on_host)
+    if multihost.process_index() != 1:
+      self.assertEmpty(arr.addressable_shards)
+      self.assertEmpty(rslices.replica_slices)
+      self.assertEmpty(on_host.replica_slices)
+    else:
+      expected_num_slices = (
+          len(other_devices) if expect_sliced else num_partitions
+      )
+      self.assertLen(rslices.replica_slices, expected_num_slices)
+      self.assertLen(on_host.replica_slices, expected_num_slices)
+      for rslice in rslices.replica_slices:
+        self.assertEqual(rslice.slice_args is not None, expect_sliced)
+      combined = np.full(global_shape, np.nan, dtype=np.float32)
+      for rslice in on_host.replica_slices:
+        self.assertTrue(np.all(np.isnan(combined[rslice.index])))
+        combined[rslice.index] = rslice.data()
+      np.testing.assert_array_equal(combined, inp)
+
   async def test_array_deserialization_with_custom_layout(self):
     handler = type_handlers.ArrayHandler()
     mesh = jax.sharding.Mesh(
