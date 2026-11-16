@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finalize thread. That call could move JAX's preemption sync counter back to
   an older step, so a process could miss the preemption save step.
 
+### Changed
+
+- Warn once when `CheckpointManager` or `v1.training.Checkpointer` skips a save
+  because a newer checkpoint step already exists in the directory, and document
+  how to roll back to an earlier step.
+
 ## [0.12.11] - 2026-11-16
 
 ### Fixed
