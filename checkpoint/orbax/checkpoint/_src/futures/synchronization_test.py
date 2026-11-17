@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import itertools
 from unittest import mock
 from absl.testing import absltest
@@ -23,6 +24,15 @@ OperationIdGenerator = synchronization.OperationIdGenerator
 MultihostSynchronizedValue = synchronization.MultihostSynchronizedValue
 
 
+@contextlib.contextmanager
+def _signals_namespace(namespace: str):
+  token = synchronization.SIGNALS_NAMESPACE.set(namespace)
+  try:
+    yield
+  finally:
+    synchronization.SIGNALS_NAMESPACE.reset(token)
+
+
 class OperationIdGeneratorTest(absltest.TestCase):
 
   def setUp(self):
@@ -31,15 +41,28 @@ class OperationIdGeneratorTest(absltest.TestCase):
     OperationIdGenerator._operation_id = next(
         OperationIdGenerator._operation_id_counter
     )
+    OperationIdGenerator._namespace_counters.clear()
+    OperationIdGenerator._namespace_operation_ids.clear()
 
   def test_get_operation_id(self):
+    self.assertEqual(OperationIdGenerator.get_current_operation_id(), "0")
     OperationIdGenerator.next_operation_id()
     operation_id_1 = OperationIdGenerator.get_current_operation_id()
+
+    with _signals_namespace("local"):
+      self.assertEqual(OperationIdGenerator.get_current_operation_id(), "0")
+      OperationIdGenerator.next_operation_id()
+      local_id = OperationIdGenerator.get_current_operation_id()
+
+    with _signals_namespace("non_replicated"):
+      non_rep_id = OperationIdGenerator.get_current_operation_id()
 
     OperationIdGenerator.next_operation_id()
     operation_id_2 = OperationIdGenerator.get_current_operation_id()
 
     self.assertEqual(operation_id_1, "1")
+    self.assertEqual(local_id, "1")
+    self.assertEqual(non_rep_id, "0")
     self.assertEqual(operation_id_2, "2")
 
 

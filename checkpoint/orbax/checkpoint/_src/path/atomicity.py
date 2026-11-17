@@ -783,10 +783,8 @@ def create_all_async(
     future.AwaitableSignalsContract.add_to_awaitable_signals_contract(
         completion_signals
     )
-  elif completion_signals and pre_create_fn is not None:
-    # Surface deferred-preparation errors on non-primary hosts. Skipped
-    # otherwise: per-process operation ids may diverge (e.g. emergency
-    # non-replicated managers), so waiting could hang.
+  elif completion_signals:
+    # Surface directory-creation errors on non-primary hosts.
     commit_future = future.CommitFuture(
         asyncio.sleep(0),
         receive_signals=completion_signals,

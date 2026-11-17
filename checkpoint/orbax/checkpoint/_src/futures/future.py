@@ -17,7 +17,6 @@
 import asyncio
 import concurrent.futures
 import contextlib
-import contextvars
 import threading
 import time
 from typing import Any, Callable, Coroutine, Iterator, Optional, Sequence
@@ -36,9 +35,7 @@ _SIGNAL_ACTION_ERROR = 'signal_action_error'
 
 # Namespace for awaitable-signal keys. Scoped per save via `signals_namespace()`
 # so that managers in the same process do not share keys.
-_SIGNALS_NAMESPACE: contextvars.ContextVar[Optional[str]] = (
-    contextvars.ContextVar('orbax_signals_namespace', default=None)
-)
+_SIGNALS_NAMESPACE = synchronization.SIGNALS_NAMESPACE
 
 
 def current_signals_namespace() -> str:
@@ -65,7 +62,9 @@ class AwaitableSignalsContract:
       contract when no namespace is set via `signals_namespace()`.
   """
 
-  awaitable_signals_contract_prefix: str = 'awaitable_signals_contract'
+  awaitable_signals_contract_prefix: str = (
+      synchronization.DEFAULT_SIGNALS_NAMESPACE
+  )
 
   @classmethod
   def get_unique_awaitable_singal_key(

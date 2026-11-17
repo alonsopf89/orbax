@@ -14,6 +14,8 @@
 
 """Synchronization utilities for futures."""
 
+from collections.abc import Iterator
+import contextvars
 import enum
 import itertools
 import threading
@@ -24,6 +26,14 @@ from orbax.checkpoint import options as options_lib
 from orbax.checkpoint._src.multihost import multihost
 
 _T = TypeVar("_T")
+
+DEFAULT_SIGNALS_NAMESPACE = "awaitable_signals_contract"
+
+# Namespace for awaitable-signal keys and operation IDs. Scoped per save via
+# `signals_namespace()` so concurrent managers do not share keys or counters.
+SIGNALS_NAMESPACE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "orbax_signals_namespace", default=None
+)
 
 
 class HandlerAwaitableSignal(enum.Enum):
@@ -53,17 +63,27 @@ class OperationIdGenerator:
 
   _operation_id_counter = itertools.count()
   _operation_id = next(_operation_id_counter)
+  _namespace_counters: dict[str, Iterator[int]] = {}
+  _namespace_operation_ids: dict[str, int] = {}
 
   @classmethod
   def next_operation_id(cls) -> int:
     """Increments the operation id counter and returns the new value."""
-    cls._operation_id = next(cls._operation_id_counter)
-    return cls._operation_id
+    namespace = SIGNALS_NAMESPACE.get()
+    if not namespace or namespace == DEFAULT_SIGNALS_NAMESPACE:
+      cls._operation_id = next(cls._operation_id_counter)
+      return cls._operation_id
+    counter = cls._namespace_counters.setdefault(namespace, itertools.count(1))
+    cls._namespace_operation_ids[namespace] = next(counter)
+    return cls._namespace_operation_ids[namespace]
 
   @classmethod
   def get_current_operation_id(cls) -> str:
     """Returns the current operation id."""
-    return str(cls._operation_id)
+    namespace = SIGNALS_NAMESPACE.get()
+    if not namespace or namespace == DEFAULT_SIGNALS_NAMESPACE:
+      return str(cls._operation_id)
+    return str(cls._namespace_operation_ids.get(namespace, 0))
 
 
 class MultihostSynchronizedValue(Generic[_T]):

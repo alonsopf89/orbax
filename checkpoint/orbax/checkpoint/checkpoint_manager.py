@@ -2333,7 +2333,8 @@ class CheckpointManager(AbstractCheckpointManager, epy.ContextManager):
         and self._multiprocessing_options.primary_host is not None
     ):
       client = signaling_client.get_signaling_client()
-      operation_id = synchronization.OperationIdGenerator.next_operation_id()
+      with future.signals_namespace(self._signals_namespace):
+        operation_id = synchronization.OperationIdGenerator.next_operation_id()
       cancel_barrier_key = (
           f'{self._signals_namespace}_checkpoint_manager_cancel_'
           f'{operation_id}_{in_flight_step}/'
